@@ -4,6 +4,8 @@ const express = require('express');
 const socketIO = require('socket.io');
 
 const {generateMessage, generateLocationMessage} = require('./utils/message');
+const {isRealString} = require('./utils/validation');
+const {Users} = require('./utils/users');
 
 const publicPath = path.join(__dirname, '../public');
 const port = process.env.PORT || 3000;
@@ -12,7 +14,7 @@ const port = process.env.PORT || 3000;
 var app = express();
 var server = http.createServer(app);
 var io = socketIO(server);
-
+var users = new Users();
 
 
 // configure middleware to serve up public
@@ -23,10 +25,26 @@ io.on('connection', (socket) => {
     console.log('new user connected');
 
     // just to to this socket
-    socket.emit('newMessage', generateMessage('Admin','Welcome to our chatroom, thank you for joining'));
 
-    // go to all sockets but this one
-    socket.broadcast.emit('newMessage', generateMessage('Admin', `New User has joined the chatroom`));
+    socket.on('join', (params, callback) => {
+        if(!isRealString(params.name) || !isRealString(params.room)) {
+            return callback('Name and room name are required');
+        }
+
+        // add user to room, remove from other rooms
+        socket.join(params.room);
+        users.removeUser(socket.id);
+        users.addUser(socket.id, params.name, params.room);
+
+        io.to(params.room).emit('updateUserList', users.getUserList(params.room));
+        
+        socket.emit('newMessage', generateMessage('Admin','Welcome to our chatroom, thank you for joining'));
+
+        // go to all sockets but this one
+        socket.broadcast.to(params.room).emit('newMessage', generateMessage('Admin', `${params.name} has joined the room ${params.room}`));
+    
+        return callback();
+    });
 
 
     socket.on('createMessage', (newMessage, callback) => {
@@ -42,6 +60,12 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log('client was disconnected...');
+        var user = users.removeUser(socket.id); // remove user from room
+        if(user) {
+            // tell user was removed
+            io.to(user.room).emit('updateUserList', users.getUserList(user.room));
+            io.to(user.room).emit('newMessage', generateMessage('Admin', `${user.name} has left the room`));
+        }
     });
 });
 
